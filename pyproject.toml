@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "resume_agents"
+version = "0.1.0"
+description = "简历多 Agent 系统 - 基于 LangChain 的简历生成/优化/JD匹配"
+requires-python = ">=3.10"
+dependencies = [
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "pydantic>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "langchain-anthropic>=0.2.0",
+    "langchain-google-genai>=1.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["resume_agents", "resume_agents.*"]
