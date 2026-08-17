@@ -7,6 +7,30 @@ export type BlockKind =
   | 'summary'
   | 'custom'
 
+export type WatermarkKind = 'skill' | 'role' | 'soft' | 'domain'
+
+export type WatermarkAnchor =
+  | 'after_contact'
+  | 'after_summary'
+  | 'after_education'
+  | 'after_skills'
+  | 'after_work'
+  | 'after_project'
+  | 'end'
+
+export interface WatermarkItem {
+  id: string
+  kind: WatermarkKind
+  enabled: boolean
+  anchor: WatermarkAnchor
+  content: string
+}
+
+export interface WatermarkPrefs {
+  enabledKinds: WatermarkKind[]
+  anchors: Partial<Record<WatermarkKind, WatermarkAnchor>>
+}
+
 export type StructuredBlock =
   | {
       form: 'contact'
@@ -51,10 +75,10 @@ export interface ResumeDocument {
   domain: string
   nodes: ResumeNode[]
   updatedAt: string
-  /** ATS hidden keywords: injected on print/export; nearly invisible to humans */
   hiddenKeywords?: string[]
-  /** Whether to inject hidden keywords on export; default true */
   includeHiddenKeywords?: boolean
+  watermarks?: WatermarkItem[]
+  watermarkPrefs?: WatermarkPrefs
 }
 
 export interface SuggestionItem {

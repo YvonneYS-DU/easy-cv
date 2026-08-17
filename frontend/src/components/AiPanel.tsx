@@ -4,8 +4,9 @@ import {
   Sparkles,
   X,
 } from 'lucide-react'
-import type { ChatTurn, StructuredBlock, SuggestionItem } from '../types/resume'
+import type { ChatTurn, StructuredBlock, SuggestionItem, WatermarkItem, WatermarkKind } from '../types/resume'
 import { BlockEditor } from './BlockEditor'
+import { WatermarkEditor } from './WatermarkEditor'
 
 const QUICK_PROMPTS = [
   '按当前投递方向改写这段',
@@ -33,6 +34,13 @@ interface Props {
   tab: 'edit' | 'tools'
   onTabChange: (tab: 'edit' | 'tools') => void
   toolsSlot: ReactNode
+  includeHiddenKeywords: boolean
+  watermarks: WatermarkItem[]
+  onIncludeHiddenChange: (value: boolean) => void
+  onWatermarkChange: (
+    kind: WatermarkKind,
+    patch: Partial<Pick<WatermarkItem, 'enabled' | 'anchor' | 'content'>>,
+  ) => void
 }
 
 export function AiPanel({
@@ -53,6 +61,10 @@ export function AiPanel({
   tab,
   onTabChange,
   toolsSlot,
+  includeHiddenKeywords,
+  watermarks,
+  onIncludeHiddenChange,
+  onWatermarkChange,
 }: Props) {
   const empty = !selectedChip
 
@@ -103,6 +115,15 @@ export function AiPanel({
             </div>
             <BlockEditor data={draft} onChange={onDraftChange} />
           </div>
+
+          <div className="cv-divider" />
+
+          <WatermarkEditor
+            includeHidden={includeHiddenKeywords}
+            watermarks={watermarks}
+            onIncludeChange={onIncludeHiddenChange}
+            onChange={onWatermarkChange}
+          />
 
           <div className="cv-divider" />
 

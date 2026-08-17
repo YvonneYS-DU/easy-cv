@@ -33,6 +33,7 @@ import {
 } from './components/LibrarySidebar'
 import { ResumePaper } from './components/ResumePaper'
 import { ToolsPanel } from './components/ToolsPanel'
+import { WatermarkEditor } from './components/WatermarkEditor'
 import { sampleResume } from './data/sampleResume'
 import type {
   ApplicationStrategy,
@@ -45,13 +46,14 @@ import type {
   ResumeVersion,
   StructuredBlock,
   SuggestionItem,
+  WatermarkItem,
+  WatermarkKind,
 } from './types/resume'
 import {
   applyPlainTextToBlock,
   applyStructuredToBlock,
   getBlockNode,
   markdownSectionsToDocument,
-  normalizeHiddenKeywords,
   parseBlockHtml,
   parseImportedText,
   plainToStructured,
@@ -59,6 +61,15 @@ import {
   resumeToPlainText,
   structuredToPlain,
 } from './utils/resume'
+import {
+  copyWatermarkState,
+  ensureWatermarks,
+  flattenWatermarkKeywords,
+  hydrateResumeWatermarks,
+  prefsFromWatermarks,
+  saveWatermarkPrefs,
+  updateWatermark,
+} from './utils/watermark'
 
 const LIBRARY_KEY = 'easy-cv-library-v1'
 
@@ -117,16 +128,16 @@ function sessionToUi(session: ChatSession): {
 }
 
 function cloneSample(): ResumeDocument {
-  return {
+  return hydrateResumeWatermarks({
     ...sampleResume,
     id: sampleResume.id,
     updatedAt: new Date().toISOString(),
     nodes: sampleResume.nodes.map((n) => ({ ...n })),
-  }
+  })
 }
 
 function blankResume(title = '未命名简历', domain = 'ai_engineer'): ResumeDocument {
-  return {
+  return hydrateResumeWatermarks({
     id: uid('resume'),
     title,
     domain,
@@ -153,7 +164,7 @@ function blankResume(title = '未命名简历', domain = 'ai_engineer'): ResumeD
         html: `<div class="cv-skill-line">在此填写职业摘要…</div>`,
       },
     ],
-  }
+  })
 }
 
 function escapeHtml(input: string): string {
@@ -221,7 +232,13 @@ function loadLibrary(): { items: ResumeLibraryItem[]; activeId: string } {
           parsed.activeId && parsed.items.some((i) => i.id === parsed.activeId)
             ? parsed.activeId
             : parsed.items[0].id
-        return { items: parsed.items, activeId }
+        return {
+          items: parsed.items.map((item) => ({
+            ...item,
+            document: hydrateResumeWatermarks(item.document),
+          })),
+          activeId,
+        }
       }
     }
   } catch {
@@ -267,8 +284,9 @@ export default function App() {
   const [matchResult, setMatchResult] = useState<JDMatchResult | null>(null)
   const [jdRewriteMarkdown, setJdRewriteMarkdown] = useState<string | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
-  const [exportHiddenDraft, setExportHiddenDraft] = useState('')
-  const [exportIncludeHidden, setExportIncludeHidden] = useState(true)
+  const [exportIncludeHidden, setExportIncludeHidden] = useState(
+    () => initial.items.find((i) => i.id === initial.activeId)?.document.includeHiddenKeywords !== false,
+  )
   const [draft, setDraft] = useState<StructuredBlock | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const skipPersist = useRef(true)
@@ -389,7 +407,7 @@ export default function App() {
     setLibrary((prev) =>
       prev.map((item) => {
         if (item.id !== activeId) return item
-        const nextDoc = updater(item.document)
+        const nextDoc = hydrateResumeWatermarks(updater(item.document))
         return {
           ...item,
           title: extras?.title ?? nextDoc.title ?? item.title,
@@ -419,6 +437,7 @@ export default function App() {
     setSelectedId(firstBlock?.id || null)
     setDraft(null)
     setSidebarOpen(false)
+    setExportIncludeHidden(target?.includeHiddenKeywords !== false)
   }
 
   function addToLibrary(item: ResumeLibraryItem, select = true) {
@@ -709,30 +728,50 @@ export default function App() {
   }
 
   function openExportModal() {
-    setExportHiddenDraft((doc.hiddenKeywords || []).join('\n'))
     setExportIncludeHidden(doc.includeHiddenKeywords !== false)
     setExportOpen(true)
   }
 
-  function persistExportSettings(nextKeywords?: string[], nextInclude?: boolean) {
-    const keywords = nextKeywords ?? normalizeHiddenKeywords(exportHiddenDraft)
+  function persistExportSettings(nextInclude?: boolean) {
     const include = nextInclude ?? exportIncludeHidden
-    setExportHiddenDraft(keywords.join('\n'))
     setExportIncludeHidden(include)
     setDoc((prev) => ({
       ...prev,
-      hiddenKeywords: keywords,
       includeHiddenKeywords: include,
       updatedAt: new Date().toISOString(),
     }))
-    return { keywords, include }
+    return { include }
+  }
+
+  function persistWatermarks(next: WatermarkItem[], include = exportIncludeHidden) {
+    const prefs = prefsFromWatermarks(next)
+    saveWatermarkPrefs(prefs)
+    setExportIncludeHidden(include)
+    setDoc((prev) => ({
+      ...prev,
+      watermarks: next,
+      watermarkPrefs: prefs,
+      hiddenKeywords: flattenWatermarkKeywords(next),
+      includeHiddenKeywords: include,
+      updatedAt: new Date().toISOString(),
+    }))
+  }
+
+  function handleIncludeHiddenChange(value: boolean) {
+    persistWatermarks(ensureWatermarks(doc), value)
+  }
+
+  function handleWatermarkChange(
+    kind: WatermarkKind,
+    patch: Partial<Pick<WatermarkItem, 'enabled' | 'anchor' | 'content'>>,
+  ) {
+    persistWatermarks(updateWatermark(ensureWatermarks(doc), kind, patch))
   }
 
   function withExportDoc() {
-    const { keywords, include } = persistExportSettings()
+    const { include } = persistExportSettings()
     return {
       ...doc,
-      hiddenKeywords: keywords,
       includeHiddenKeywords: include,
     }
   }
@@ -743,8 +782,8 @@ export default function App() {
     downloadText(`${exportDoc.title || 'resume'}.md`, md, 'text/markdown;charset=utf-8')
     setExportOpen(false)
     showToast(
-      exportDoc.includeHiddenKeywords !== false && (exportDoc.hiddenKeywords?.length || 0) > 0
-        ? '已导出 Markdown（含隐藏关键词）'
+      exportDoc.includeHiddenKeywords !== false && flattenWatermarkKeywords(ensureWatermarks(exportDoc)).length > 0
+        ? '已导出 Markdown（含隐藏水印）'
         : '已导出 Markdown',
     )
   }
@@ -755,8 +794,8 @@ export default function App() {
     downloadText(`${exportDoc.title || 'resume'}.txt`, text, 'text/plain;charset=utf-8')
     setExportOpen(false)
     showToast(
-      exportDoc.includeHiddenKeywords !== false && (exportDoc.hiddenKeywords?.length || 0) > 0
-        ? '已导出文本（含隐藏关键词）'
+      exportDoc.includeHiddenKeywords !== false && flattenWatermarkKeywords(ensureWatermarks(exportDoc)).length > 0
+        ? '已导出文本（含隐藏水印）'
         : '已导出文本',
     )
   }
@@ -769,23 +808,6 @@ export default function App() {
     window.requestAnimationFrame(() => {
       window.print()
     })
-  }
-
-  function fillHiddenFromMatch() {
-    const fromMatch = [
-      ...(matchResult?.missing_keywords || []),
-      ...(matchResult?.matched_keywords || []),
-    ]
-    if (!fromMatch.length) {
-      showToast('请先在「素材 / JD」里完成 JD 匹配')
-      return
-    }
-    const merged = normalizeHiddenKeywords([
-      ...normalizeHiddenKeywords(exportHiddenDraft),
-      ...fromMatch,
-    ])
-    setExportHiddenDraft(merged.join('\n'))
-    showToast(`已填入 ${merged.length} 个关键词`)
   }
 
   async function handleAddMaterial() {
@@ -819,11 +841,7 @@ export default function App() {
         domain,
         res.resume.sections,
       )
-      setDoc({
-        ...next,
-        hiddenKeywords: doc.hiddenKeywords,
-        includeHiddenKeywords: doc.includeHiddenKeywords,
-      })
+      setDoc(copyWatermarkState(doc, next))
       setSelectedId(next.nodes.find((n) => n.type === 'block')?.id || null)
       setTab('edit')
       await refreshVersions()
@@ -897,11 +915,7 @@ export default function App() {
         return { name, content: lines.slice(1).join('\n').trim() }
       })
     const next = markdownSectionsToDocument(doc.title, domain, sections)
-    setDoc({
-      ...next,
-      hiddenKeywords: doc.hiddenKeywords,
-      includeHiddenKeywords: doc.includeHiddenKeywords,
-    })
+    setDoc(copyWatermarkState(doc, next))
     showToast('已应用 JD 改写稿')
   }
 
@@ -931,11 +945,13 @@ export default function App() {
     try {
       if (version.document_json && Object.keys(version.document_json).length > 0) {
         const restored = version.document_json as unknown as ResumeDocument
-        setDoc({
+        const restoredDoc = hydrateResumeWatermarks({
           ...restored,
           id: activeId,
           updatedAt: new Date().toISOString(),
         })
+        setDoc(restoredDoc)
+        setExportIncludeHidden(restoredDoc.includeHiddenKeywords !== false)
       } else if (version.raw_markdown) {
         const sections = version.raw_markdown
           .split(/\n(?=# )/)
@@ -952,10 +968,8 @@ export default function App() {
           sections,
         )
         setDoc({
-          ...next,
+          ...copyWatermarkState(doc, next),
           id: activeId,
-          hiddenKeywords: doc.hiddenKeywords,
-          includeHiddenKeywords: doc.includeHiddenKeywords,
         })
       } else {
         showToast('该版本没有可恢复内容')
@@ -1071,6 +1085,10 @@ export default function App() {
           }}
           tab={tab}
           onTabChange={setTab}
+          includeHiddenKeywords={exportIncludeHidden}
+          watermarks={ensureWatermarks(doc)}
+          onIncludeHiddenChange={handleIncludeHiddenChange}
+          onWatermarkChange={handleWatermarkChange}
           toolsSlot={
             <ToolsPanel
               domain={domain}
@@ -1117,51 +1135,18 @@ export default function App() {
           <div className="cv-modal" onClick={(e) => e.stopPropagation()}>
             <div className="heading-sm">导出简历</div>
             <div className="body-md" style={{ color: 'var(--text-secondary)' }}>
-              支持 Markdown / 纯文本下载，或直接打印为 PDF。可先配置 ATS 隐藏关键词。
+              支持 Markdown / 纯文本下载，或直接打印为 PDF。隐藏水印也可在右侧「区块编辑」里随时改。
             </div>
 
             <div className="cv-export-section">
-              <div className="cv-export-section-head">
-                <div>
-                  <div className="cv-export-title body-md">隐藏关键词（ATS）</div>
-                  <div className="cv-export-desc body-xs">
-                    人眼几乎看不见，但解析器仍可读到。适合补充 JD 关键词、项目术语、积极表述。
-                  </div>
-                </div>
-                <label className="cv-switch body-xs">
-                  <input
-                    type="checkbox"
-                    checked={exportIncludeHidden}
-                    onChange={(e) => setExportIncludeHidden(e.target.checked)}
-                  />
-                  导出时注入
-                </label>
-              </div>
-              <textarea
-                className="cv-textarea"
-                rows={4}
-                disabled={!exportIncludeHidden}
-                placeholder={
-                  '每行一个，或用逗号分隔\n例如：\nRAG\nLangChain\nmaritime compliance\nmulti-agent\nquantified impact'
-                }
-                value={exportHiddenDraft}
-                onChange={(e) => setExportHiddenDraft(e.target.value)}
+              <WatermarkEditor
+                includeHidden={exportIncludeHidden}
+                watermarks={ensureWatermarks(doc)}
+                onIncludeChange={handleIncludeHiddenChange}
+                onChange={handleWatermarkChange}
               />
-              <div className="cv-export-meta body-xs">
-                <span>
-                  {normalizeHiddenKeywords(exportHiddenDraft).length} 个词
-                  {exportIncludeHidden ? ' · 将注入导出/打印' : ' · 已关闭注入'}
-                </span>
-                <button
-                  type="button"
-                  className="cv-text-btn body-xs"
-                  onClick={fillHiddenFromMatch}
-                >
-                  从 JD 匹配填入
-                </button>
-              </div>
               <div className="cv-export-hint body-xs">
-                打印/PDF：页面底部极淡隐藏层；Markdown/文本：文末追加关键词。请仅用于真实相关技能，避免堆砌无关词。
+                打印/PDF：按类型插到对应区块后的白色字体；Markdown/文本：文末按类型追加。类型开关和插入位点会记住。
               </div>
             </div>
 

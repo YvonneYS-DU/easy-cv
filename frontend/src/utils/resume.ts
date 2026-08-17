@@ -4,6 +4,7 @@ import type {
   ResumeNode,
   StructuredBlock,
 } from '../types/resume'
+import { getWatermarkInsertions, WATERMARK_KIND_META } from './watermark'
 
 export function plainTextFromHtml(html: string): string {
   const el = document.createElement('div')
@@ -288,11 +289,31 @@ export function normalizeHiddenKeywords(input: string | string[] | undefined | n
 
 export function getEffectiveHiddenKeywords(doc: ResumeDocument): string[] {
   if (doc.includeHiddenKeywords === false) return []
+  const fromWatermarks = getWatermarkInsertions(doc).flatMap((item) => item.keywords)
+  if (fromWatermarks.length) return normalizeHiddenKeywords(fromWatermarks)
   return normalizeHiddenKeywords(doc.hiddenKeywords)
 }
 
 export function hiddenKeywordsToText(keywords: string[]): string {
   return keywords.join(' · ')
+}
+
+function appendHiddenExport(body: string, doc: ResumeDocument, asComment: boolean): string {
+  const insertions = getWatermarkInsertions(doc)
+  if (!insertions.length) {
+    const hidden = normalizeHiddenKeywords(doc.hiddenKeywords)
+    if (!hidden.length) return body
+    const next = asComment ? `\n<!-- ATS Hidden Keywords: ${hidden.join(', ')} -->\n\n${hiddenKeywordsToText(hidden)}\n` : `\n${hiddenKeywordsToText(hidden)}\n`
+    return body + next
+  }
+  let extra = ''
+  if (asComment) {
+    extra += `\n<!-- ATS Hidden Keywords: ${insertions.flatMap((item) => item.keywords).join(', ')} -->\n`
+  }
+  for (const insertion of insertions) {
+    extra += `\n${WATERMARK_KIND_META[insertion.item.kind].label}: ${hiddenKeywordsToText(insertion.keywords)}\n`
+  }
+  return body + extra
 }
 
 export function resumeToMarkdown(doc: ResumeDocument, opts?: { includeHidden?: boolean }): string {
@@ -306,11 +327,7 @@ export function resumeToMarkdown(doc: ResumeDocument, opts?: { includeHidden?: b
   }
   let body = parts.join('\n').trim() + '\n'
   const includeHidden = opts?.includeHidden ?? doc.includeHiddenKeywords !== false
-  const hidden = includeHidden ? normalizeHiddenKeywords(doc.hiddenKeywords) : []
-  if (hidden.length) {
-    body += `\n<!-- ATS Hidden Keywords: ${hidden.join(', ')} -->\n`
-    body += `\n${hiddenKeywordsToText(hidden)}\n`
-  }
+  if (includeHidden) body = appendHiddenExport(body, { ...doc, includeHiddenKeywords: true }, true)
   return body
 }
 
@@ -325,10 +342,7 @@ export function resumeToPlainText(doc: ResumeDocument, opts?: { includeHidden?: 
   }
   let body = parts.join('\n').trim() + '\n'
   const includeHidden = opts?.includeHidden ?? doc.includeHiddenKeywords !== false
-  const hidden = includeHidden ? normalizeHiddenKeywords(doc.hiddenKeywords) : []
-  if (hidden.length) {
-    body += `\n${hiddenKeywordsToText(hidden)}\n`
-  }
+  if (includeHidden) body = appendHiddenExport(body, { ...doc, includeHiddenKeywords: true }, false)
   return body
 }
 
